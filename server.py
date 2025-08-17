@@ -8,6 +8,7 @@ import json
 import time
 import requests
 from typing import Optional, Dict, Any
+import base64
 
 from mcp.server.fastmcp import FastMCP
 
@@ -20,12 +21,91 @@ mcp = FastMCP("research", host="0.0.0.0", port=50001)
 ak = "11279aea94d9ca063450f5109b3d6490340cf0b6f5a605552088b1081be420a2e6d0160372e57652cd7e1053e5c44efe"
 sk = "e42c1f8503a8a4f4c99271e64884142c7784662c"
 
+API_KEY = "YEGmYARHwdWHuH7LPtX6amtV"
+SECRET_KEY = "JFF2Yu53AHgbWEz4blpaWY4bPqdeEfh0"
+
 def getmd5(data):
     return hashlib.md5(data.encode('utf-8')).hexdigest()
 
 def hmacsha256(secret, message):
     data = message.encode('utf-8')
     return hmac.new(secret.encode('utf-8'), data, digestmod=hashlib.sha256).hexdigest()
+
+def get_access_token():
+    url = "https://aip.baidubce.com/oauth/2.0/token"
+    params = {
+        "grant_type": "client_credentials",
+        "client_id": API_KEY,
+        "client_secret": SECRET_KEY,
+    }
+    return str(requests.post(url, params=params).json().get("access_token"))
+
+@mcp.tool()
+def recognize_text(
+    image_path: str,
+    detect_direction: bool = False,
+    paragraph: bool = False,
+    probability: bool = False,
+) -> Dict[str, Any]:
+    """
+    调用百度OCR API识别图片中的文字, 可用于药品包装的识别。
+
+    :param image_path: str, 本地图片路径（如 "C:/images/test.jpg"）。
+    :param detect_direction: bool, 是否检测文字方向（默认False）。
+    :param paragraph: bool, 是否返回段落信息（默认False）。
+    :param probability: bool, 是否返回置信度（默认False）。
+    
+    :return: Dict[str, Any], 返回识别结果，包含以下字段：
+             - 'text' (str): 识别出的文字内容。
+             - 'error' (str): 如果出错，返回错误信息。
+    """
+    try:
+        # 1. 获取 access_token
+        url = "https://aip.baidubce.com/rest/2.0/ocr/v1/accurate_basic?access_token=" + get_access_token()
+        print(url)
+
+        # 2. 读取图片并转换为 Base64
+        with open(image_path, "rb") as f:
+            image_base64 = base64.b64encode(f.read()).decode("utf-8")
+
+        # 3. 构造请求 payload
+        payload = {
+            "image": image_base64,
+            "detect_direction": "true" if detect_direction else "false",
+            "paragraph": "true" if paragraph else "false",
+            "probability": "true" if probability else "false",
+        }
+
+        # 4. 发送请求
+        headers = {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "application/json",
+        }
+        response = requests.post(url, headers=headers, data=payload)
+        result = response.json()
+        result_num = result.get("words_result_num", 0)
+
+        # 5. 解析结果
+        if result_num == 0:
+            return {
+                "text": "",
+                "error": f"OCR识别失败: {result['error_msg']}",
+            }
+
+        # 提取识别文本
+        text = "\n".join([item["words"] for item in result.get("words_result", [])])
+
+        return {
+            "text": text,
+            "error": "",
+        }
+
+    except Exception as e:
+        return {
+            "text": "",
+            "error": f"OCR识别异常: {str(e)}",
+        }
+
 
 @mcp.tool()
 def ask_doctor(user_input: str, session_id: Optional[str] = None) -> Dict[str, Any]:
