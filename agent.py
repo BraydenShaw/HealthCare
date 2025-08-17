@@ -169,7 +169,7 @@ medicine_agent = LlmAgent(
 hospital_agent = LlmAgent(
     name="hospital_agent",
     description="根据病情报告推荐医院（适用于重症）。",
-    instruction="获取用户位置，然后推荐医院需要调用地图工具推荐。",
+    instruction="获取用户位置，然后推荐医院需要调用地图工具推荐。当要给出确切医院地点时，回答必须以‘我将为您提供以下医院’开头。",
     model=base_model,
     output_key="hospital",
     tools=[toolset2],
@@ -178,6 +178,7 @@ hospital_agent = LlmAgent(
 # =============================
 # Orchestrator 逻辑
 # =============================
+hospital_flag = 0
 
 class OrchestratorAgent(BaseAgent):
     """
@@ -204,29 +205,34 @@ class OrchestratorAgent(BaseAgent):
     @override
     async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
         logger.info(f"[{self.name}] 开始 Orchestrator 流程")
+        
+        global hospital_flag
 
-        # Step 1: 问诊
-        async for event in self.inquiry_agent.run_async(ctx):
-            yield event
+        if hospital_flag == 0:
+            # Step 1: 问诊
+            async for event in self.inquiry_agent.run_async(ctx):
+                yield event
 
-        inquiry_result = ctx.session.state.get("inquiry_result", {})
-        if "本轮问诊结束" not in inquiry_result:
-            return
+            inquiry_result = ctx.session.state.get("inquiry_result", {})
+            if "本轮问诊结束" not in inquiry_result:
+                return
 
-        logger.info(f"[{self.name}] 生成病情报告")
-        # Step 2: 生成病情报告
-        async for event in self.report_agent.run_async(ctx):
-            yield event
+            logger.info(f"[{self.name}] 生成病情报告")
+            # Step 2: 生成病情报告
+            async for event in self.report_agent.run_async(ctx):
+                yield event
 
-        report_text = ctx.session.state.get("report", "")
+            report_text = ctx.session.state.get("report", "")
 
         # Step 3: 分流（轻症 → 药物；重症 → 医院）
-        if "轻度" in report_text or "轻症" in report_text:
-            async for event in self.medicine_agent.run_async(ctx):
-                yield event
-        else:
-            async for event in self.hospital_agent.run_async(ctx):
-                yield event
+        async for event in self.hospital_agent.run_async(ctx):
+            yield event
+
+        hospital_flag = 1
+        hospital_result = ctx.session.state.get("hospital", {})
+
+        if "我将为您提供以下医院" in hospital_result:
+            hospital_flag = 0
 
         logger.info(f"[{self.name}] Orchestrator 流程结束")
 
