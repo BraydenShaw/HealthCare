@@ -42,7 +42,7 @@ def get_access_token():
 
 @mcp.tool()
 def recognize_text(
-    image_path: str,
+    url: str,
     detect_direction: bool = False,
     paragraph: bool = False,
     probability: bool = False,
@@ -50,7 +50,7 @@ def recognize_text(
     """
     调用百度OCR API识别图片中的文字, 可用于药品包装的识别。
 
-    :param image_path: str, 本地图片路径（如 "C:/images/test.jpg"）。
+    :param url: str, 网络图片路径（如 "http://images/test.jpg"）。
     :param detect_direction: bool, 是否检测文字方向（默认False）。
     :param paragraph: bool, 是否返回段落信息（默认False）。
     :param probability: bool, 是否返回置信度（默认False）。
@@ -62,15 +62,15 @@ def recognize_text(
     try:
         # 1. 获取 access_token
         url = "https://aip.baidubce.com/rest/2.0/ocr/v1/accurate_basic?access_token=" + get_access_token()
-        print(url)
+        
 
         # 2. 读取图片并转换为 Base64
-        with open(image_path, "rb") as f:
-            image_base64 = base64.b64encode(f.read()).decode("utf-8")
+        # with open(image_path, "rb") as f:
+        #     image_base64 = base64.b64encode(f.read()).decode("utf-8")
 
         # 3. 构造请求 payload
         payload = {
-            "image": image_base64,
+            "image": url,
             "detect_direction": "true" if detect_direction else "false",
             "paragraph": "true" if paragraph else "false",
             "probability": "true" if probability else "false",
@@ -178,6 +178,213 @@ def ask_doctor(user_input: str, session_id: Optional[str] = None) -> Dict[str, A
         }
 
 @mcp.tool()
+def apartment_query(user_input: str, session_id: Optional[str] = None) -> Dict[str, Any]: 
+    """
+    调用多轮在线问诊AI模型,用于为用户推荐适合就诊的科室。
+    通过多轮对话收集患者主诉，精准推荐适合就诊的科室.
+    该工具模拟患者与AI医生进行对话。它会处理会话ID，并根据模型的响应判断对话是否结束。
+
+    :param user_input: str, 患者的输入，例如“头痛挂什么科室”或对医生问题的回答。
+    :param session_id: Optional[str], 对话的会话ID。如果是首轮对话，请保持为None；
+                       如果是多轮对话，请传入上一轮返回的session_id。
+    :return: Dict[str, Any], 一个包含以下键的字典:
+             - 'scene' (int): 对话场景状态码。0表示对话继续，501表示对话结束。
+             - 'model_response' (list): AI医生返回的内容。
+             - 'session_id' (str): 当前对话的会话ID，用于下一轮调用。
+             - 'error' (str): 如果发生错误，则包含错误信息。
+    
+    **重要使用说明**:
+    如果返回结果中 'scene' 的值为 0，意味着对话尚未结束，Agent必须根据'model_response'的内容再次调用此工具以继续问诊。
+    如果 'scene' 的值为 501，意味着问诊结束，Agent可以向用户展示最终诊断报告。
+    """
+    stream = False
+    
+    # 如果 session_id 是 None (首次对话)，API需要一个空字符串
+    current_session_id = session_id or ""
+
+    message = {
+        "model": "third-common-v3-department",
+        "stream": stream,
+        "session_id": current_session_id, # 应用型API生效，首轮对话时为空，后续对话时可传入首轮对话返回的session_id，保留上下文信息
+        "messages": [
+            {
+                "role": "user",
+                "content": [  # 消息内容
+                    {
+                        "type": "text",
+                        "body": user_input
+                    }
+                ]
+            }
+        ]
+    }
+
+    md5 = getmd5(json.dumps(message))
+    timestr = time.strftime("%d %b %Y %H:%M:%S GMT", time.localtime())
+    authStringPrefix = "ihcloud/" + ak + "/" + timestr + "/300"
+    signingKey = hmacsha256(sk, authStringPrefix)
+    host = 'https://01bot.baidu.com'
+    router = '/api/01bot/sse-gateway/stream'
+    reqUrl = host + router
+    canonicalRequest = '\n'.join(["POST", router, "content-md5:" + md5])
+    signature = hmacsha256(signingKey, canonicalRequest)
+    headers = {
+        "Content-Type": "application/json",
+        "X-IHU-Authorization-V2": authStringPrefix + "/" + signature
+    }
+    if stream:
+        response = requests.post(reqUrl, data=json.dumps(message), headers=headers, stream=True)
+
+        for line in response.iter_lines():
+            return line.decode('utf-8')
+    else:
+        response = requests.post(reqUrl, data=json.dumps(message), headers=headers)
+        data = json.loads(response.text)
+
+        return {
+            "scene": data['result'][0]['messages'][0]['scene'],
+            "model_response": data['result'][0]['messages'][0]['content'],
+            "session_id": data['result'][0]['session_id']
+        }
+
+@mcp.tool()
+def skin_disease_query(
+    url: str, 
+    query: str, 
+    model = "third-skin-v1-diagnose",
+    session_id: Optional[str] = None) -> str:
+    """
+    调用皮肤病诊断 API 进行图片和文本的问诊。
+
+    Args:
+        url: str, 图片的路径（如 "http://images/test.jpg"）。
+        query: str, 用户提出的关于皮肤病的具体问题。
+        model: str, 使用的模型名称。默认为 'third-skin-v1-diagnose'。
+                可选值: 'third-skin-v1-diagnose', 'third-skin-v2-diagnose'。
+        session_id: Optional[str], 对话 session_id。首轮对话可为空，后续对话传入可保留上下文。
+
+    Returns:
+        返回 API 的 JSON 字符串格式的应答。如果请求失败，则返回包含错误信息的字符串。
+    """
+
+    stream = False
+    message = {
+        "model": model, # third-skin-v1-diagnose, third-skin-v2-diagnose
+        "stream": stream,
+        "session_id": session_id or "", # 应用型API生效，首轮对话时为空，后续对话时可传入首轮对话返回的session_id，保留上下文信息
+        "messages": [
+            {
+                "role": "user",            # 角色
+                "content": [               # 消息内容
+                    {
+                        "type": "image",
+                        "url": url,
+                    },
+                    {
+                        "type": "text",
+                        "body": query,
+                    }
+                ]
+            }
+        ]
+    }
+
+    try:
+        md5 = getmd5(json.dumps(message))
+        timestr = time.strftime("%d %b %Y %H:%M:%S GMT", time.localtime())
+        authStringPrefix = "ihcloud/" + ak + "/" + timestr + "/300"
+        signingKey = hmacsha256(sk, authStringPrefix)
+        host = 'https://01bot.baidu.com'
+        router = '/api/01bot/sse-gateway/stream'
+        reqUrl = host + router
+        canonicalRequest = '\n'.join(["POST", router, "content-md5:" + md5])
+        signature = hmacsha256(signingKey, canonicalRequest)
+        headers = {
+            "Content-Type": "application/json",
+            "X-IHU-Authorization-V2": authStringPrefix + "/" + signature
+        }
+        if stream:
+            response = requests.post(reqUrl, data=json.dumps(message), headers=headers, stream=True)
+            for line in response.iter_lines():
+                return(line.decode('utf-8'))
+        else:
+            response = requests.post(reqUrl, data=json.dumps(message), headers=headers)
+            return(response.text)
+
+    except requests.exceptions.RequestException as e:
+        return json.dumps({"error": f"API request failed: {str(e)}"}, indent=2)
+    except Exception as e:
+        return json.dumps({"error": f"An unexpected error occurred: {str(e)}"}, indent=2)
+
+@mcp.tool()
+def tongue_query(
+    url: str, 
+    query: str, 
+    model = "third-skin-v1-diagnose",
+    session_id: Optional[str] = None) -> str:
+    """
+    调用舌头患处诊断 API 进行图片和文本的问诊。
+
+    Args:
+        url: str, 图片的路径（如 "http://images/test.jpg"）。
+        query: str, 用户提出的关于舌头患处的具体问题。
+        model: str, 使用的模型名称。默认为 'third-tongue-v1-diagnose'。
+        session_id: Optional[str], 对话 session_id。首轮对话可为空，后续对话传入可保留上下文。
+
+    Returns:
+        返回 API 的 JSON 字符串格式的应答。如果请求失败，则返回包含错误信息的字符串。
+    """
+
+
+    stream = False
+    message = {
+        "model": "third-tongue-v1-diagnose", # third-tongue-v1-diagnose
+        "stream": stream,
+        "messages": [
+            {
+                "role": "user",            # 角色
+                "content": [               # 消息内容
+                    {
+                        "type": "image",
+                        "url": url,
+                    },
+                    {
+                        "type": "text",
+                        "body": query,
+                    }
+                ]
+            }
+        ]
+    }
+
+    try:
+        md5 = getmd5(json.dumps(message))
+        timestr = time.strftime("%d %b %Y %H:%M:%S GMT", time.localtime())
+        authStringPrefix = "ihcloud/" + ak + "/" + timestr + "/300"
+        signingKey = hmacsha256(sk, authStringPrefix)
+        host = 'https://01bot.baidu.com'
+        router = '/api/01bot/sse-gateway/stream'
+        reqUrl = host + router
+        canonicalRequest = '\n'.join(["POST", router, "content-md5:" + md5])
+        signature = hmacsha256(signingKey, canonicalRequest)
+        headers = {
+            "Content-Type": "application/json",
+            "X-IHU-Authorization-V2": authStringPrefix + "/" + signature
+        }
+        if stream:
+            response = requests.post(reqUrl, data=json.dumps(message), headers=headers, stream=True)
+            for line in response.iter_lines():
+                return(line.decode('utf-8'))
+        else:
+            response = requests.post(reqUrl, data=json.dumps(message), headers=headers)
+            return(response.text)
+    
+    except requests.exceptions.RequestException as e:
+        return json.dumps({"error": f"API request failed: {str(e)}"}, indent=2)
+    except Exception as e:
+        return json.dumps({"error": f"An unexpected error occurred: {str(e)}"}, indent=2)
+
+@mcp.tool()
 def consult_drug(
     query: str,
     model: str = "third-common-v1-DrugQA",
@@ -245,93 +452,6 @@ def consult_drug(
     except Exception as e:
         return json.dumps({"error": f"An unexpected error occurred: {str(e)}"}, indent=2)
 
-
-@mcp.tool()
-def search_papers(topic: str, max_results: int = 5) -> List[str]:
-    """
-    Search for papers on arXiv based on a topic and store their information.
-
-    Args:
-        topic: The topic to search for
-        max_results: Maximum number of results to retrieve (default: 5)
-
-    Returns:
-        List of paper IDs found in the search
-    """
-
-    # Use arxiv to find the papers
-    client = arxiv.Client()
-
-    # Search for the most relevant articles matching the queried topic
-    search = arxiv.Search(
-        query=topic,
-        max_results=max_results,
-        sort_by=arxiv.SortCriterion.Relevance
-    )
-
-    papers = client.results(search)
-
-    # Create directory for this topic
-    path = os.path.join(PAPER_DIR, topic.lower().replace(" ", "_"))
-    os.makedirs(path, exist_ok=True)
-
-    file_path = os.path.join(path, "papers_info.json")
-
-    # Try to load existing papers info
-    try:
-        with open(file_path, "r") as json_file:
-            papers_info = json.load(json_file)
-    except (FileNotFoundError, json.JSONDecodeError):
-        papers_info = {}
-
-    # Process each paper and add to papers_info  
-    paper_ids = []
-    for paper in papers:
-        paper_ids.append(paper.get_short_id())
-        paper_info = {
-            'title': paper.title,
-            'authors': [author.name for author in paper.authors],
-            'summary': paper.summary,
-            'pdf_url': paper.pdf_url,
-            'published': str(paper.published.date())
-        }
-        papers_info[paper.get_short_id()] = paper_info
-
-    # Save updated papers_info to json file
-    with open(file_path, "w") as json_file:
-        json.dump(papers_info, json_file, indent=2)
-
-    print(f"Results are saved in: {file_path}")
-
-    return paper_ids
-
-@mcp.tool()
-def extract_info(paper_id: str) -> str:
-    """
-    Search for information about a specific paper across all topic directories.
-
-    Args:
-        paper_id: The ID of the paper to look for
-
-    Returns:
-        JSON string with paper information if found, error message if not found
-    """
-
-    for item in os.listdir(PAPER_DIR):
-        item_path = os.path.join(PAPER_DIR, item)
-        if os.path.isdir(item_path):
-            file_path = os.path.join(item_path, "papers_info.json")
-            if os.path.isfile(file_path):
-                try:
-                    with open(file_path, "r") as json_file:
-                        papers_info = json.load(json_file)
-                        if paper_id in papers_info:
-                            return json.dumps(papers_info[paper_id], indent=2)
-                except (FileNotFoundError, json.JSONDecodeError) as e:
-                    print(f"Error reading {file_path}: {str(e)}")
-                    continue
-
-    return f"There's no saved information related to paper {paper_id}."
 
 if __name__ == "__main__":
     # Initialize and run the server
