@@ -61,7 +61,7 @@ def recognize_text(
     """
     try:
         # 1. 获取 access_token
-        url = "https://aip.baidubce.com/rest/2.0/ocr/v1/accurate_basic?access_token=" + get_access_token()
+        url_access = "https://aip.baidubce.com/rest/2.0/ocr/v1/accurate_basic?access_token=" + get_access_token()
         
 
         # 2. 读取图片并转换为 Base64
@@ -70,7 +70,7 @@ def recognize_text(
 
         # 3. 构造请求 payload
         payload = {
-            "image": url,
+            "url": url,
             "detect_direction": "true" if detect_direction else "false",
             "paragraph": "true" if paragraph else "false",
             "probability": "true" if probability else "false",
@@ -81,7 +81,7 @@ def recognize_text(
             "Content-Type": "application/x-www-form-urlencoded",
             "Accept": "application/json",
         }
-        response = requests.post(url, headers=headers, data=payload)
+        response = requests.post(url_access, headers=headers, data=payload)
         result = response.json()
         result_num = result.get("words_result_num", 0)
 
