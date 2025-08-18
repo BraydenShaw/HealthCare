@@ -67,6 +67,7 @@ inquiry_agent = Agent(
         "你是一个问诊 agent，需要与用户进行多轮问诊。"
         "当ask_doctor返回最终诊断报告时，你必须输出‘本轮问诊结束’为开头的内容，并判断病情严重程度是否需要去医院就诊，如需去医院就诊，必须输出‘前往医院就诊’"
         "必须完整的给出诊断报告"
+        "当ask_doctor返回的提问，与上次对话返回的提问内容基本一致时，直接再次调用ask_doctor，告诉它‘结束问诊’"
     ),
     tools=[toolset, toolset2],
     output_key="inquiry_result",  # 存 JSON 对象
@@ -161,17 +162,19 @@ report_agent = LlmAgent(
 # 推荐药物 agent
 medicine_agent = LlmAgent(
     name="medicine_agent",
-    description="必须使用工具，根据病情报告推荐药物",
+    description="根据病情报告推荐药物，并回答用户",
+    instruction=("推荐至多三种药物"),
     model=base_model,
     output_key="medicine",
-    tools=[toolset],
 )
 
 # 推荐医院 agent
 hospital_agent = LlmAgent(
     name="hospital_agent",
     description="推荐附近的医院。",
-    instruction="获取用户位置，然后推荐医院需要调用地图工具推荐。当要给出确切医院地点时，回答必须以‘我将为您提供以下医院’开头。",
+    instruction=("获取用户位置，然后推荐医院需要调用地图工具推荐。当要给出确切医院地点时，回答必须以‘我将为您提供以下医院’开头。"
+                 "选择三个最好的医院。"
+                 ),
     model=base_model,
     output_key="hospital",
     tools=[toolset2],
@@ -232,6 +235,8 @@ class OrchestratorAgent(BaseAgent):
             # Step 3: 推荐药物
             async for event in self.medicine_agent.run_async(ctx):
                 yield event
+
+            medicine_text = ctx.session.state.get("medicine", "")
 
         if "前往医院就诊" in inquiry_result or hospital_flag:
             logger.info(f"[{self.name}] 推荐医院")
