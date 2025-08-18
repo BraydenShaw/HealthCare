@@ -51,7 +51,7 @@ use_model = "gpt-4o"
 if use_model == "deepseek":
     base_model = LiteLlm(model="deepseek/deepseek-chat")
 elif use_model == "gpt-4o":
-    base_model = LiteLlm(model="gpt-4o")
+    base_model = LiteLlm(model="gpt-4o", temperature=0.1)
 else:
     raise ValueError("Unknown model option")
 
@@ -65,7 +65,8 @@ inquiry_agent = Agent(
     model=base_model,
     instruction=(
         "你是一个问诊 agent，需要与用户进行多轮问诊。"
-        "当ask_doctor返回最终诊断报告时，你必须输出‘本轮问诊结束’为开头的内容"
+        "当ask_doctor返回最终诊断报告时，你必须输出‘本轮问诊结束’为开头的内容，并判断病情严重程度是否需要去医院就诊，如需去医院就诊，必须输出‘前往医院就诊’"
+        "必须完整的给出诊断报告"
     ),
     tools=[toolset, toolset2],
     output_key="inquiry_result",  # 存 JSON 对象
@@ -160,15 +161,16 @@ report_agent = LlmAgent(
 # 推荐药物 agent
 medicine_agent = LlmAgent(
     name="medicine_agent",
-    description="根据病情报告推荐药物（适用于轻症）。",
+    description="必须使用工具，根据病情报告推荐药物",
     model=base_model,
     output_key="medicine",
+    tools=[toolset],
 )
 
 # 推荐医院 agent
 hospital_agent = LlmAgent(
     name="hospital_agent",
-    description="根据病情报告推荐医院（适用于重症）。",
+    description="推荐附近的医院。",
     instruction="获取用户位置，然后推荐医院需要调用地图工具推荐。当要给出确切医院地点时，回答必须以‘我将为您提供以下医院’开头。",
     model=base_model,
     output_key="hospital",
@@ -208,6 +210,8 @@ class OrchestratorAgent(BaseAgent):
         
         global hospital_flag
 
+        inquiry_result = ctx.session.state.get("inquiry_result", {})
+
         if hospital_flag == 0:
             # Step 1: 问诊
             async for event in self.inquiry_agent.run_async(ctx):
@@ -224,15 +228,22 @@ class OrchestratorAgent(BaseAgent):
 
             report_text = ctx.session.state.get("report", "")
 
-        # Step 3: 分流（轻症 → 药物；重症 → 医院）
-        async for event in self.hospital_agent.run_async(ctx):
-            yield event
+            logger.info(f"[{self.name}] 推荐药物")
+            # Step 3: 推荐药物
+            async for event in self.medicine_agent.run_async(ctx):
+                yield event
 
-        hospital_flag = 1
-        hospital_result = ctx.session.state.get("hospital", {})
+        if "前往医院就诊" in inquiry_result or hospital_flag:
+            logger.info(f"[{self.name}] 推荐医院")
+            # Step 3: 推荐医院
+            async for event in self.hospital_agent.run_async(ctx):
+                yield event
 
-        if "我将为您提供以下医院" in hospital_result:
-            hospital_flag = 0
+            hospital_flag = 1
+            hospital_result = ctx.session.state.get("hospital", {})
+
+            if "我将为您提供以下医院" in hospital_result:
+                hospital_flag = 0
 
         logger.info(f"[{self.name}] Orchestrator 流程结束")
 
