@@ -18,8 +18,8 @@ PAPER_DIR = "papers"
 #mcp = FastMCP("research", host = "localhost", port=50001)
 mcp = FastMCP("research", host="0.0.0.0", port=50001)
 
-ak = "11279aea94d9ca063450f5109b3d6490340cf0b6f5a605552088b1081be420a2e6d0160372e57652cd7e1053e5c44efe"
-sk = "e42c1f8503a8a4f4c99271e64884142c7784662c"
+ak = ""
+sk = ""
 
 API_KEY = "YEGmYARHwdWHuH7LPtX6amtV"
 SECRET_KEY = "JFF2Yu53AHgbWEz4blpaWY4bPqdeEfh0"
